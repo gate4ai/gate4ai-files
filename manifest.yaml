@@ -1,6 +1,6 @@
 connector: files
 description: Files in allowed folders
-version: "2"
+version: "3"
 runtime: wasm
 capabilities:
   files: ["${setting:roots}/**"]
