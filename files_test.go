@@ -33,11 +33,25 @@ func setup(t *testing.T) (*hosttest.Host, connector.Connector, string) {
 func TestReadListAppendWrite(t *testing.T) {
 	h, c, home := setup(t)
 	res, err := h.Execute(c, "read", map[string]any{"path": "~/Documents/obsidian/a.md"})
-	if err != nil || res.Result.(map[string]any)["content"] != "# A\n" {
+	if err != nil || res.Content[0].Type != abi.ContentText || res.Content[0].Text != "# A\n" || res.Structured.(map[string]any)["size"] != 4.0 {
 		t.Fatal(res, err)
 	}
+	// Изображение — блок image, прочие двоичные файлы — двоичный resource.
+	dir := filepath.Join(home, "Documents/obsidian")
+	os.WriteFile(filepath.Join(dir, "p.png"), []byte("\x89PNG\x00\x01"), 0o644)
+	os.WriteFile(filepath.Join(dir, "d.bin"), []byte{0, 1, 2}, 0o644)
+	res, err = h.Execute(c, "read", map[string]any{"path": "~/Documents/obsidian/p.png"})
+	if err != nil || res.Content[0].Type != abi.ContentImage || res.Content[0].MIMEType != "image/png" {
+		t.Fatal(res, err)
+	}
+	res, err = h.Execute(c, "read", map[string]any{"path": "~/Documents/obsidian/d.bin"})
+	if err != nil || res.Content[0].Type != abi.ContentResource || string(res.Content[0].Data) != "\x00\x01\x02" || !strings.HasPrefix(res.Content[0].URI, "file://") {
+		t.Fatal(res, err)
+	}
+	os.Remove(filepath.Join(dir, "p.png"))
+	os.Remove(filepath.Join(dir, "d.bin"))
 	res, err = h.Execute(c, "list", map[string]any{"path": "~/Documents/obsidian"})
-	if err != nil || len(res.Result.(map[string]any)["entries"].([]any)) != 4 {
+	if err != nil || len(res.Structured.(map[string]any)["entries"].([]any)) != 4 {
 		t.Fatal(res, err)
 	}
 	args := map[string]any{"path": "~/Documents/obsidian/a.md", "text": "- item"}
@@ -65,7 +79,7 @@ func TestReadListAppendWrite(t *testing.T) {
 		t.Fatal(v)
 	}
 	os.WriteFile(filepath.Join(home, "Documents/obsidian/b.md"), []byte("tampered"), 0o644)
-	if v, _ := h.Verify(c, "write", wargs, res); v.Status != abi.Failed {
+	if v, _ := h.Verify(c, "write", wargs, res); v.Status != abi.NotConfirmed {
 		t.Fatal("tamper not detected")
 	}
 }
@@ -100,10 +114,11 @@ func TestEscapes(t *testing.T) {
 	if _, err := h.Execute(c, "read", map[string]any{"path": "~/x"}); err == nil || !strings.Contains(err.Error(), "roots") {
 		t.Fatal("no roots must deny everything", err)
 	}
-	h.Settings = map[string]any{"roots": []any{"~/Documents/obsidian"}}
+	// Обрезанный по max_bytes двоичный файл не отдаётся.
+	h.Settings = map[string]any{"roots": []any{"~/Documents/obsidian"}, "max_bytes": 2.0}
 	os.WriteFile(filepath.Join(home, "Documents/obsidian/bin.dat"), []byte{0, 1, 2}, 0o644)
-	if _, err := h.Execute(c, "read", map[string]any{"path": "~/Documents/obsidian/bin.dat"}); err == nil {
-		t.Fatal("binary read")
+	if _, err := h.Execute(c, "read", map[string]any{"path": "~/Documents/obsidian/bin.dat"}); err == nil || !strings.Contains(err.Error(), "max_bytes") {
+		t.Fatal("truncated binary read", err)
 	}
 }
 
